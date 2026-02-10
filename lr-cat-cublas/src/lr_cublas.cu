@@ -2,6 +2,7 @@
 #include "cuda_check.h"
 #include <cmath>
 #include <cstdio>
+#include <vector>
 
 // -------------------------
 // CUDA kernels (algorithm parts)
@@ -34,25 +35,32 @@ __global__ void k_sigmoid(float* p, const float* z, int n) {
 
 __global__ void k_error(float* e, const float* p, const float* y, int n) {
   int i = blockIdx.x * blockDim.x + threadIdx.x;
-  if (i < n) e[i] = p[i] - y[i];
+  
+  if (i < n) e[i] = (p[i] - y[i]) * (y[i] > 0.5f ? 9.0f : 1.0f); // for stable gradient when y=0 or 1
 }
 
 // Binary cross entropy loss: average over N
 // loss = -mean( y*log(p) + (1-y)*log(1-p) )
-__global__ void k_bce_partial(const float* p, const float* y, float* partial, int n) {
-  // partial length = gridDim.x, each block reduces into partial[blockIdx.x]
-  __shared__ float buf[256];
+__global__ void k_bce_logits_partial(const float* z, const float* y,
+                                     float* partial, int n) {
+  extern __shared__ float buf[];
   int tid = threadIdx.x;
   int i = blockIdx.x * blockDim.x + tid;
+
   float s = 0.f;
   if (i < n) {
-    float pi = fminf(fmaxf(p[i], 1e-7f), 1.0f - 1e-7f);
-    float yi = y[i];
-    s = -(yi * logf(pi) + (1.0f - yi) * logf(1.0f - pi));
+    float zi = z[i];
+    float yi = y[i];          // assume 0 or 1
+
+    // Stable logistic loss:
+    // L = max(z,0) - z*y + log(1 + exp(-|z|))
+    float az = fabsf(zi);
+    s = fmaxf(zi, 0.0f) - zi * yi + log1pf(expf(-az));
   }
+
   buf[tid] = s;
   __syncthreads();
-  // reduction
+
   for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
     if (tid < stride) buf[tid] += buf[tid + stride];
     __syncthreads();
@@ -60,8 +68,9 @@ __global__ void k_bce_partial(const float* p, const float* y, float* partial, in
   if (tid == 0) partial[blockIdx.x] = buf[0];
 }
 
+
 __global__ void k_reduce_sum(const float* a, float* out, int n) {
-  __shared__ float buf[256];
+  extern __shared__ float buf[];
   int tid = threadIdx.x;
   int i = blockIdx.x * blockDim.x + tid;
   float s = (i < n) ? a[i] : 0.f;
@@ -115,10 +124,6 @@ void LrCublas::init(int N_, int D_, cudaStream_t s) {
   // cuBLAS handle
   CUBLAS_CHECK(cublasCreate(&handle));
   CUBLAS_CHECK(cublasSetStream(handle, stream));
-
-  // Note: you must choose a consistent memory convention for cuBLAS.
-  // We store X row-major (N x D). cuBLAS assumes column-major by default.
-  // You will handle this in TODO GEMM calls (via transposes and leading dimensions).
 }
 
 void LrCublas::upload_Xy(const float* h_X, const float* h_y) {
@@ -136,28 +141,14 @@ void LrCublas::random_init(unsigned long long seed) {
   h_b = 0.0f;
 }
 
-void LrCublas::predict_proba(float* d_out_p, const float* d_in_X) {
-  // Compute z = XW + b then p=sigmoid(z)
-  // For simplicity reuse d_z as temp, but d_in_X may differ from d_X.
-  // TODO: GEMM/GEMV with cuBLAS to compute d_z = d_in_X * d_W
-
-  // --- TODO (cuBLAS) ---
-  // 1) Compute logits z = XW
-  //    Shapes: X: (N, D), W: (D, 1) => z: (N, 1)
-  //
-  //    Decide whether you interpret memory as column-major or use transpose tricks.
-  //    If you keep X row-major, one common approach is to compute:
-  //      z^T = W^T * X^T  (both are "nice" in column-major view)
-  //    Or treat X as column-major with swapped dims.
-  //
-  // Fill in:
-  //   cublasSgemm(...) or cublasSgemv(...)
-  //
+void LrCublas::predict_proba(float* d_out_p, float* d_test_z, const float* d_in_X, int test_N) {
+  float alpha = 1.0f, beta = 0.0f;
+  CUBLAS_CHECK(cublasSgemv(handle, CUBLAS_OP_T, D, test_N, &alpha, d_in_X, D, d_W, 1, &beta, d_test_z, 1));
   // After GEMM, add bias and sigmoid:
   int threads = 256;
-  int blocksN = (N + threads - 1) / threads;
-  k_add_bias<<<blocksN, threads, 0, stream>>>(d_z, h_b, N);
-  k_sigmoid<<<blocksN, threads, 0, stream>>>(d_out_p, d_z, N);
+  int blocksN = (test_N + threads - 1) / threads;
+  k_add_bias<<<blocksN, threads, 0, stream>>>(d_test_z, h_b, test_N);
+  k_sigmoid<<<blocksN, threads, 0, stream>>>(d_out_p, d_test_z, test_N);
   CUDA_CHECK(cudaGetLastError());
 }
 
@@ -176,9 +167,9 @@ float LrCublas::train_step(float lr) {
   k_set_zero<<<1, 1, 0, stream>>>(d_db, 1);
 
   // 1) z = XW  (cuBLAS)
-  // --- TODO (cuBLAS) ---
-  // Compute d_z (N) = d_X (N x D) times d_W (D)
-  // Use cublasSgemv or cublasSgemm. Keep consistent with your memory convention.
+  float alpha = 1.0f, beta = 0.0f;
+  CUBLAS_CHECK(cublasSgemv(handle, CUBLAS_OP_T, D, N, &alpha, d_X, D, d_W, 1, &beta, d_z, 1));
+  CUDA_CHECK(cudaGetLastError());
 
   // 2) z += b
   k_add_bias<<<blocksN, threads, 0, stream>>>(d_z, h_b, N);
@@ -190,13 +181,11 @@ float LrCublas::train_step(float lr) {
   k_error<<<blocksN, threads, 0, stream>>>(d_e, d_p, d_y, N);
 
   // 5) dW = X^T e  (cuBLAS)
-  // --- TODO (cuBLAS) ---
-  // Compute d_dW (D) = X^T (D x N) times e (N)
-  // Again gemv/gemm.
+  CUBLAS_CHECK(cublasSgemv(handle, CUBLAS_OP_N, D, N, &alpha, d_X, D, d_e, 1, &beta, d_dW, 1));
 
   // 6) db = sum(e) (reduction)
   // d_db already zeroed; atomicAdd inside.
-  k_reduce_sum<<<blocksN, threads, 0, stream>>>(d_e, d_db, N);
+  k_reduce_sum<<<blocksN, threads, threads * sizeof(float), stream>>>(d_e, d_db, N);
 
   // 7) Update weights: W -= lr * (1/N) * dW
   float invN = 1.0f / (float)N;
@@ -214,7 +203,7 @@ float LrCublas::train_step(float lr) {
   int lossBlocks = (N + threads - 1) / threads;
   float* d_partial = nullptr;
   CUDA_CHECK(cudaMalloc(&d_partial, (size_t)lossBlocks * sizeof(float)));
-  k_bce_partial<<<lossBlocks, threads, 0, stream>>>(d_p, d_y, d_partial, N);
+  k_bce_logits_partial<<<lossBlocks, threads, threads * sizeof(float), stream>>>(d_z, d_y, d_partial, N);
   CUDA_CHECK(cudaGetLastError());
 
   std::vector<float> h_partial(lossBlocks);

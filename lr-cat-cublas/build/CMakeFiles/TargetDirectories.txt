@@ -1,0 +1,3 @@
+C:/AI projects/Neural-Network-using-cuBLAS/lr-cat-cublas/build/CMakeFiles/lr_cat_cublas.dir
+C:/AI projects/Neural-Network-using-cuBLAS/lr-cat-cublas/build/CMakeFiles/ALL_BUILD.dir
+C:/AI projects/Neural-Network-using-cuBLAS/lr-cat-cublas/build/CMakeFiles/ZERO_CHECK.dir

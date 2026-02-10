@@ -13,8 +13,8 @@ struct Dataset {
 // For the course: implement however you like:
 // - CIFAR-10: cat vs not-cat
 // - a folder of images with labels
-Dataset load_dataset_stub(const std::string& root_dir,
-                          int max_samples,
-                          int target_w,
-                          int target_h,
-                          bool normalize_0_1);
+Dataset load_dataset_cifar10_cat(const std::string& root_dir,
+                          int max_samples);
+
+Dataset load_dataset_cifar10_cat_test(const std::string& root,
+                                      int max_samples);

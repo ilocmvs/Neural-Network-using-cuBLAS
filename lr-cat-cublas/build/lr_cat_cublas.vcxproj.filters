@@ -1,0 +1,24 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <ClCompile Include="C:\AI projects\Neural-Network-using-cuBLAS\lr-cat-cublas\src\main.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\AI projects\Neural-Network-using-cuBLAS\lr-cat-cublas\src\dataset_stub.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <CudaCompile Include="..\src\lr_cublas.cu">
+      <Filter>Source Files</Filter>
+    </CudaCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <CustomBuild Include="C:\AI projects\Neural-Network-using-cuBLAS\lr-cat-cublas\CMakeLists.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{05DA916F-6EDD-3703-BB70-C1B640B6C363}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

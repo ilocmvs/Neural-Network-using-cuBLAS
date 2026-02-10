@@ -29,7 +29,7 @@ struct LrCublas {
   float train_step(float lr);
 
   // Inference probability for batch X
-  void predict_proba(float* d_out_p /*N*/, const float* d_in_X /*N*D*/);
+  void predict_proba(float* d_out_p /*N*/, float* test_d_z, const float* d_in_X /*N*D*/, int test_N);
 
   void cleanup();
 };
